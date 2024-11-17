@@ -1,0 +1,21 @@
+---
+title: "Classification Models"
+format: html
+editor: visual
+---
+
+## Libraries & Reading in the data
+
+Before getting started, we need to read in the necessary libraries and bring in the data
+
+```{r}
+library(tidymodels)
+library(tidyverse)
+
+bike_data <- read_csv(file='https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv',show_col_types=FALSE)
+
+head(bike_data)
+```
+
+## Placeholder
+
