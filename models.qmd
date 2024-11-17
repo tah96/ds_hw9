@@ -1,21 +1,365 @@
 ---
-title: "Classification Models"
+title: "Modeling For Data Science"
 format: html
 editor: visual
 ---
 
-## Libraries & Reading in the data
+## Reading in Libraries and our data
 
-Before getting started, we need to read in the necessary libraries and bring in the data
+We'll first read in our libraries and our dataset of interest
 
 ```{r}
-library(tidymodels)
 library(tidyverse)
+library(tidymodels)
+library(parsnip)
+library(lubridate)
+library(see)
 
 bike_data <- read_csv(file='https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv',show_col_types=FALSE)
-
 head(bike_data)
 ```
 
-## Placeholder
+## Exploratory Data Ananlyses
+
+Before building our models, we want to get familiar with our data and perform some non-transformative data transformations if needed.
+
+Lets check for the missing values in our data...The good news is there are no missing values!
+
+```{r}
+colSums(is.na(bike_data))
+```
+
+Lets check the column types to make sure they make sense along with some sample values. A few things we notice:
+
+1.  Date is read in as `character` type. We will want to update this to numeric or date type
+2.  There are four Seasons. Winter, Sprint, Fall and Summer.
+3.  Holiday and Functioning Day attributes could be used as boolean if needed. They only hold 2 values
+
+```{r}
+str(bike_data)
+```
+
+Diving a level further, lets make sure all of our numeric columns where we should only expect values greater than zero follow that pattern. We will also want to make sure our assumption on values for Seasons, Holiday and Functioning Day hold true.
+
+Everything seems to look good per the output below
+
+```{r}
+numColsInterest <- list(rented_bike <- bike_data$`Rented Bike Count`,
+                        hour <- bike_data$Hour,
+                        humid <- bike_data$`Humidity(%)`,
+                        wind <- bike_data$`Wind speed (m/s)`,
+                        vis <- bike_data$`Visibility (10m)`,
+                        solar <- bike_data$`Solar Radiation (MJ/m2)`,
+                        rain <- bike_data$`Rainfall(mm)`,
+                        snow <- bike_data$`Snowfall (cm)`
+                        
+)
+
+catColsInterest <- list(seasons_unique = unique(bike_data$Seasons),
+                        holiday_unique = unique(bike_data$Holiday),
+                        day_unique = unique(bike_data$`Functioning Day`))
+
+catColsInterest
+
+numMins <- lapply(numColsInterest,min)
+str(numMins)
+```
+
+We want a series of transformations and renamings. We want the `Date` column in a data format. We want `Seasons`,`Holiday`,`Functioning Day` as factors. We also want to rename all of our columns so they're easier to work with using camel_case format.
+
+We can see everything reflected in our structure output.
+
+```{r}
+bike_data <- bike_data %>%
+  mutate(Date = dmy(Date),
+         Seasons = as.factor(Seasons),
+         Holiday = as.factor(Holiday),
+         `Functioning Day` = as.factor(`Functioning Day`)
+         ) %>%
+  rename(date = Date,
+         rented_bike_count = `Rented Bike Count`,
+         hour = Hour,
+         temperature_c = `Temperature(\xb0C)`,
+         humidity_perc = `Humidity(%)`,
+         wind_speed_ms = `Wind speed (m/s)`,
+         visibility = `Visibility (10m)`,
+         dew_temp = `Dew point temperature(\xb0C)`,
+         solar_radiation = `Solar Radiation (MJ/m2)`,
+         rainfall_mm = `Rainfall(mm)`,
+         snowfall_cm = `Snowfall (cm)`,
+         season = Seasons,
+         holiday = Holiday,
+         func_day = `Functioning Day`
+         )
+
+str(bike_data)
+```
+
+We want to create some summary statistics. We want to look our our `rented_bike_count` across our categorical variables `season`, `holiday` and `func_day`.
+
+```{r}
+bike_summaries <- list(general=NULL, season = NULL, holiday = NULL, func_day = NULL)
+
+summarizeNumeric <- function(data,catVar){
+  catSym <- sym(catVar)
+  summary_data <- bike_data %>%
+    select(rented_bike_count,!!catSym) %>%
+    group_by(!!catSym) %>%
+    summarize(across(everything(), .fns = list("mean" = mean,
+                                                 "median" = median,
+                                                 "var" = var,
+                                                 "sd" = sd,
+                                                 "IQR" = IQR), .names = "{.fn}_{.col}"))
+  return(summary_data)
+}
+
+
+bike_summaries$season <- summarizeNumeric(bike_data,"season")
+bike_summaries$holiday <- summarizeNumeric(bike_data,"holiday")
+bike_summaries$func_day <- summarizeNumeric(bike_data,"func_day")
+
+bike_summaries$general <- bike_data %>%
+  select(rented_bike_count) %>%
+  summarize(across(everything(), .fns = list("mean" = mean,
+                                                 "median" = median,
+                                                 "var" = var,
+                                                 "sd" = sd,
+                                                 "IQR" = IQR), .names = "{.fn}_{.col}"))
+
+bike_summaries
+
+
+```
+
+One major thing that stands out is no bikes are sold on a non-functioning day. This makes sense because a bike shop cannot sell bikes when it is closed. We will subset the data to only look at functioning days
+
+```{r | echo:false}
+bike_data <- bike_data %>%
+  filter(func_day == "Yes")
+```
+
+For modeling and summaries later, we want to look at day-level granularity rather than hourly. Lets transform the data using `dplyr` to give us some appropriate aggregate measures of our weather related variables.
+
+We'll group by `date`, `season` and `holiday`.
+
+```{r}
+agg_bike_data <- bike_data %>%
+  group_by(date,season,holiday) %>%
+  summarize(rented_bike_count= sum(rented_bike_count),
+            total_rainfall_mm = sum(rainfall_mm),
+            total_snowfall_cm = sum(snowfall_cm),
+            avg_temp_c = mean(temperature_c),
+            avg_humidity_perc = mean(humidity_perc),
+            avg_windspeed_ms = mean(wind_speed_ms),
+            avg_dew_temp = mean(dew_temp),
+            avg_solar_radiation = mean(solar_radiation),
+            avg_visibility = mean(visibility)
+            )
+
+head(agg_bike_data)
+```
+
+Lets recreate our basic summary tables from the previous steps using this data. There is no need to do this for `func_day` anymore since there is only one value after our previous subsetting
+
+```{r}
+agg_bike_summaries <- list(general=NULL, season = NULL, holiday = NULL)
+
+agg_bike_summaries$season <- summarizeNumeric(agg_bike_data,"season")
+agg_bike_summaries$holiday <- summarizeNumeric(agg_bike_data,"holiday")
+
+agg_bike_summaries$general <- agg_bike_data %>%
+  select(rented_bike_count) %>%
+  summarize(across(everything(), .fns = list("mean" = mean,
+                                                 "median" = median,
+                                                 "var" = var,
+                                                 "sd" = sd,
+                                                 "IQR" = IQR), .names = "{.fn}_{.col}"))
+
+agg_bike_summaries
+```
+
+We want to explore some relationships we're curious about and visualize them in plots. There are more than a dozen we can explore, but for the purpose of keeping this concise you can the following plots an their observations.
+
+1.  Scatter plot between rented bikes and the average temperature colored by season. We notice a positive correlation and obvious grouping of temperatures based on season. This is expected.
+2.  Scatter plot between rented bikes and the average solar radiation colored by season. We notice a positive correlation and obvious grouping of solar radiation based on season. This is expected.
+3.  Density plot for units sold colored by season. We see a larger spread for most seasons except for winter which seems to hold a smaller spread of units sold by day.
+4.  Boxplot for visibility across season. We observe boxplots with somewhat spread, but spring seems to have a lower median that others indicating lower visibility. Perhaps this is due to fog in the spring.
+
+```{r}
+sales_temp_scatter <- ggplot(agg_bike_data,aes(x=avg_temp_c,y=rented_bike_count,color=season)) +
+  geom_point() +
+  labs(title='Temp & Units Rented Plot colored by Season') +
+  xlab('Temperature (C)') +
+  ylab('Bikes Rented')
+
+sales_radiation_scatter <- ggplot(agg_bike_data,aes(x=avg_solar_radiation,y=rented_bike_count,color=season)) +
+  geom_point() +
+  labs(title='Radiation & Units Rented Plot colored by Season') +
+  xlab('Radiation') +
+  ylab('Bikes Rented')
+
+season_sales_dens <-
+  ggplot(agg_bike_data,aes(x=rented_bike_count)) +
+  geom_density(aes(fill=season),alpha=0.6) +
+  labs(title = 'Density plot of Unit sales over seasons',fill = 'Season') +
+  xlab('Units Rented') +
+  ylab('Density')
+
+season_visibility_box <- ggplot(agg_bike_data, aes(x=season, y= avg_visibility)) +
+  geom_boxplot(varwidth=T, fill="lightblue") + 
+  labs(title="Visibility by Season Box", 
+       x="Season",
+       y="Visibility")
+  
+
+sales_temp_scatter
+sales_radiation_scatter
+season_sales_dens
+season_visibility_box
+```
+
+We want to calculate some correlations. You can read the output below as a correlation matrix. Some notable relationships include...
+
+1.  0.75 correlation value between the bike count and the average temperature for that day
+2.  0.735 correlation value between the bike count and the average solar radiation for that day
+3.  Weak but negative correlation (\~-0.25) for rainfall, snow and wind against bike count.
+
+All of these loosely point to more sales on warm and sunny days!
+
+```{r}
+numeric_vars <- agg_bike_data %>% 
+  ungroup() %>%
+  select(where(is.numeric))
+
+cor(numeric_vars)
+
+```
+
+## Modeling
+
+Now that we've done some exploratory analysis, lets get started on our model creation. First we'll split our data in test and training sets (seasons as strata). We'll also split our training set in folds for cross-validation.
+
+We can see our split is 75/25 (training/testing) and that there are 10 folds in our training set in the output below.
+
+```{r}
+bike_split <- initial_split(agg_bike_data,prop=0.75,strata=season)
+bike_train <- training(bike_split)
+bike_test <- testing(bike_split)
+bike_train_10_fold <- vfold_cv(bike_train,10)
+
+bike_split
+bike_train_10_fold
+```
+
+Lets construct three recipes. For each recipe, we'll factor our dates to either "Weekday" or "Weekend" depending on the day of the week. We'll also normalize our numeric variables and create dummy variables for our categoricals.
+
+Here's where our 3 models different slightly: 1. Recipe 1 is exactly as described above with no additional changes 2. Recipe 2 adds interactions between holiday & seasons, seasons & temperature, and temperature & rainfall 3. Recipe 3 includes everything in Recipe 2 with the added complexity of our numeric predictors having quadratic terms.
+
+```{r}
+recipe_1 <- recipe(rented_bike_count ~ ., data = bike_train) |>
+  update_role(date, new_role = "ID") |>
+  step_date(date,features=c("dow")) |>
+  step_mutate(date_dow = factor(date_dow,levels=unique(date_dow),labels=if_else(unique(date_dow) %in% c('Mon','Tue','Wed','Thu','Fri'),"Weekday","Weekend"))) |>
+  step_normalize(all_numeric(), -all_outcomes()) |>
+  step_dummy(season,holiday,date_dow)
+
+recipe_2 <- recipe(rented_bike_count ~ ., data = bike_train) |>
+  update_role(date, new_role = "ID") |>
+  step_date(date,features=c("dow")) |>
+  step_mutate(date_dow = factor(date_dow,levels=unique(date_dow),labels=if_else(unique(date_dow) %in% c('Mon','Tue','Wed','Thu','Fri'),"Weekday","Weekend"))) |>
+  step_normalize(all_numeric(), -all_outcomes()) |>
+  step_dummy(season,holiday,date_dow) |>
+  step_interact(terms = ~ starts_with("season"):starts_with("holiday") + 
+                  starts_with("season"):avg_temp_c +
+                  avg_temp_c:total_rainfall_mm)
+
+recipe_3 <- recipe(rented_bike_count ~ ., data = bike_train) |>
+  update_role(date, new_role = "ID") |>
+  step_date(date,features=c("dow")) |>
+  step_mutate(date_dow = factor(date_dow,levels=unique(date_dow),labels=if_else(unique(date_dow) %in% c('Mon','Tue','Wed','Thu','Fri'),"Weekday","Weekend"))) |>
+  step_normalize(all_numeric(), -all_outcomes()) |>
+  step_poly(all_numeric_predictors(), degree = 2, keep_original_cols = FALSE) |>
+  step_dummy(season,holiday,date_dow) |>
+  step_interact(terms = ~ starts_with("season"):starts_with("holiday") + 
+                  starts_with("season"):avg_temp_c_poly_1 +
+                  avg_temp_c_poly_1:total_rainfall_mm_poly_1)
+
+recipe_1
+recipe_2
+recipe_3
+  
+```
+
+Now that we've got our recipe, lets set up a linear regression model and use the "lm" engine
+
+```{r}
+bike_mod <- linear_reg() %>%
+  set_engine("lm")
+
+bike_mod
+```
+
+We'll use our 10 fold CV training set in our models with each recipe. Before doing this we need to create our individual workflows to collect metrics.
+
+Looking at our CV error (2 for each), we see that our third model (interactions & polynomials) is our best model with the lowest RMSE!
+
+```{r}
+bike_wfl_1 <- workflow() |>
+  add_recipe(recipe_1) |>
+  add_model(bike_mod)
+  
+bike_fit_1 <- bike_wfl_1 |>
+  fit_resamples(bike_train_10_fold)
+
+bike_wfl_2 <- workflow() |>
+  add_recipe(recipe_2) |>
+  add_model(bike_mod)
+
+bike_fit_2 <- bike_wfl_2 |>
+  fit_resamples(bike_train_10_fold)
+
+bike_wfl_3 <- workflow() |>
+  add_recipe(recipe_3) |>
+  add_model(bike_mod)
+
+bike_fit_3 <- bike_wfl_3 |>
+  fit_resamples(bike_train_10_fold)
+
+rbind(bike_fit_1 |> collect_metrics(),bike_fit_2 |> collect_metrics(),bike_fit_3 |> collect_metrics())
+```
+
+Since our interaction and polynomial model is our best model, we want to keep this, evaluate against our entire training set and test against our test set.
+
+Our RMSE evaluated against our test data can be seen in the first output module. We can also see our coefficients from the fitted model in the second output module.
+
+```{r}
+test_metrics <- bike_wfl_3 |>
+  last_fit(bike_split) |>
+  collect_metrics()
+
+final_model <- bike_wfl_3 |>
+  fit(bike_train) |>
+  extract_fit_parsnip() |>
+  tidy()
+
+test_metrics
+final_model
+```
+
+# Additional Models
+
+We'll consider some additional models as well. This includes the following:
+
+1.  Lasso Model
+2.  Regression Tree Model
+3.  Bagged Model
+4.  Random Forest Model
+
+## Lasso Model
+
+Starting with our Lasso Model....
+
+```{r}
+
+```
 
