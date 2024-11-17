@@ -15,6 +15,7 @@ library(parsnip)
 library(lubridate)
 library(see)
 library(glmnet)
+library(baguette)
 
 bike_data <- read_csv(file='https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv',show_col_types=FALSE)
 head(bike_data)
@@ -495,6 +496,52 @@ tree_final_fit <- tree_final_wfl |>
 
 tree_final_fit
 ```
-Placeholder: Include some other things per the homework req doc
+## Bagged Tree
+
+Now we'll tune a bag tree model and pick the best from this class of models. Per usual, lets start with defining the model and building the workflow. Again, we'll use `recipe_3` from our linear regression section since we can reuse it here.
+
+Our tree depth is set to 5 and the minimum number of nodes is 10 leaving cost complexity as our tunning parameter.
+
+```{r}
+bag_model <- bag_tree(tree_depth = 5, min_n = 10, cost_complexity = tune()) |>
+  set_engine("rpart") |>
+  set_mode("classification")
+
+bag_wfl <- bag_wkf <- workflow() |>
+  add_recipe(recipe_3) |>
+  add_model(bag_model)
+
+bag_wfl
+```
+Now to fit our model. We'll use our cross-validation folds and ensure the metrics return are accuracy and log-loss.
+
+We see our best fit model on the first tow of the output above.
+
+```{r}
+bag_fit <- bag_wkf |>
+  tune_grid(resamples = bike_train_10_fold,
+            grid = grid_regular(cost_complexity(),
+                                levels = 15),
+            metrics = metric_set(accuracy, mn_log_loss))
 
 
+bag_fit |>
+  collect_metrics() |>
+  filter(.metric == "mn_log_loss")
+```
+
+Using that model with our tuned parameters, we'll finalize our workflow, train the data and look at performance metrics on the test set.
+
+In our best model we observe a log-loss of _________
+
+```{r}
+bag_best_params <- select_best(bag_fit, "mn_log_loss")
+
+bag_final_wkf <- bag_wkf |>
+  finalize_workflow(bag_best_params)
+
+bag_final_fit <- bag_final_wkf |>
+  last_fit(bike_split, metrics = metric_set(accuracy, mn_log_loss))
+```
+
+## Random Forest.
