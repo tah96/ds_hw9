@@ -16,6 +16,7 @@ library(lubridate)
 library(see)
 library(glmnet)
 library(baguette)
+library(ranger)
 
 bike_data <- read_csv(file='https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv',show_col_types=FALSE)
 head(bike_data)
@@ -544,4 +545,42 @@ bag_final_fit <- bag_final_wkf |>
   last_fit(bike_split, metrics = metric_set(accuracy, mn_log_loss))
 ```
 
-## Random Forest.
+## Random Forest
+
+The last model we want to evaluate is a random forest model. Time for our model and workflow setup!
+
+```{r}
+rf_model <- rand_forest(mtry = tune()) |>
+  set_engine("ranger") |>
+  set_mode("classification")
+
+rf_wfl <- workflow() |>
+  add_recipe(recipe_3) |>
+  add_model(rf_model)
+
+rf_model
+```
+Lets fit it to our CV folds.
+
+```{r}
+rf_fit <- rf_wfl |>
+  tune_grid(resamples = bike_train_10_fold,
+            grid = 7,
+            metrics = metric_set(accuracy, mn_log_loss))
+
+rf_fit |>
+collect_metrics() |>
+filter(.metric == "mn_log_loss") |>
+arrange(mean)
+```
+Placeholder after issue resolved on all models failing
+
+```{r}
+rf_best_params <- select_best(rf_fit, "mn_log_loss")
+
+rf_final_wkf <- rf_wkf |>
+  finalize_workflow(rf_best_params)
+rf_final_fit <- rf_final_wkf |>
+  last_fit(bike_split, metrics = metric_set(accuracy, mn_log_loss))
+```
+
