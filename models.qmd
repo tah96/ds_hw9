@@ -595,7 +595,7 @@ rf_test_metrics <- rf_final_fit |>
 
 ## Comparing all our models
 
-Lets look at all our models. We wnat to pick the best model from the RMSE statistic and the MAE statistic.
+Lets look at all our models. We want to pick the best model from the RMSE statistic and the MAE statistic.
 
 We can see for both MAE and RMSE, our Random Forest model is the winner (first two rows) and boast the lowest values for each!
 
