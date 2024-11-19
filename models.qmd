@@ -336,8 +336,8 @@ Since our interaction and polynomial model is our best model, we want to keep th
 Our RMSE evaluated against our test data can be seen in the first output module. We can also see our coefficients from the fitted model in the second output module.
 
 ```{r}
-test_metrics <- bike_wfl_3 |>
-  last_fit(bike_split) |>
+mlr_test_metrics <- bike_wfl_3 |>
+  last_fit(bike_split,metrics=metric_set(rmse,mae)) |>
   collect_metrics()
 
 final_model <- bike_wfl_3 |>
@@ -345,7 +345,7 @@ final_model <- bike_wfl_3 |>
   extract_fit_parsnip() |>
   tidy()
 
-test_metrics
+mlr_test_metrics
 final_model
 ```
 
@@ -387,7 +387,8 @@ We are showing the output for `lasso_grid_1`. We can see there are nested tibble
 ```{r}
 lasso_grid_1 <- lasso_wfl_1 |>
   tune_grid(resamples = bike_train_10_fold,
-            grid = grid_regular(penalty(), levels = 200))
+            grid = grid_regular(penalty(), levels = 200),
+            metrics = metric_set(rmse,mae))
 
 lasso_grid_2 <- lasso_wfl_2 |>
   tune_grid(resamples = bike_train_10_fold,
@@ -406,7 +407,7 @@ Again, this seems hard to read as the RMSE seems static across penalties. Note t
 ```{r}
 lasso_grid_1 |>
   collect_metrics() |>
-  filter(.metric == "rmse")
+  filter(.metric %in% c("rmse"))
 ```
 
 Lets fetch the lowest RMSE for each of our workflows and showcase the output. We have very similar optimal pentalties, our tuning parameter.
@@ -438,7 +439,7 @@ Lastly, using our best model, we'll train on the training dataset and evalauate 
 ```{r}
 lasso_test_metrics <- lasso_wfl_3 |>
   finalize_workflow(lowest_rmse_3) |>
-  last_fit(bike_split) |>
+  last_fit(bike_split,metrics=metric_set(rmse,mae)) |>
   collect_metrics()
 
 lasso_test_metrics
@@ -492,10 +493,12 @@ tree_final_wfl <- tree_wfl |>
   finalize_workflow(tree_best_params)
 
 tree_final_fit <- tree_final_wfl |>
-  last_fit(bike_split) |>
+  last_fit(bike_split,metrics=metric_set(rmse,mae))
+
+tree_test_metrics <- tree_final_fit |>
   collect_metrics()
 
-tree_final_fit
+tree_test_metrics
 ```
 ## Bagged Tree
 
@@ -506,7 +509,7 @@ Our tree depth is set to 5 and the minimum number of nodes is 10 leaving cost co
 ```{r}
 bag_model <- bag_tree(tree_depth = 5, min_n = 10, cost_complexity = tune()) |>
   set_engine("rpart") |>
-  set_mode("classification")
+  set_mode("regression")
 
 bag_wfl <- bag_wkf <- workflow() |>
   add_recipe(recipe_3) |>
@@ -523,26 +526,29 @@ bag_fit <- bag_wkf |>
   tune_grid(resamples = bike_train_10_fold,
             grid = grid_regular(cost_complexity(),
                                 levels = 15),
-            metrics = metric_set(accuracy, mn_log_loss))
+            metrics = metric_set(rmse))
 
 
 bag_fit |>
   collect_metrics() |>
-  filter(.metric == "mn_log_loss")
+  filter(.metric == "rmse")
 ```
 
-Using that model with our tuned parameters, we'll finalize our workflow, train the data and look at performance metrics on the test set.
-
-In our best model we observe a log-loss of _________
+Using that model with our tuned parameters, we'll finalize our workflow, train the data and look at performance metrics on the test set. We'll use the lowest RMSE to select our best model
 
 ```{r}
-bag_best_params <- select_best(bag_fit, "mn_log_loss")
+bag_best_params <- select_best(bag_fit, metric = "rmse")
 
 bag_final_wkf <- bag_wkf |>
   finalize_workflow(bag_best_params)
 
 bag_final_fit <- bag_final_wkf |>
-  last_fit(bike_split, metrics = metric_set(accuracy, mn_log_loss))
+  last_fit(bike_split, metrics = metric_set(rmse,mae))
+
+bag_test_metrics <- bag_final_fit |>
+  collect_metrics()
+
+bag_test_metrics
 ```
 
 ## Random Forest
@@ -552,10 +558,10 @@ The last model we want to evaluate is a random forest model. Time for our model 
 ```{r}
 rf_model <- rand_forest(mtry = tune()) |>
   set_engine("ranger") |>
-  set_mode("classification")
+  set_mode("regression")
 
 rf_wfl <- workflow() |>
-  add_recipe(recipe_3) |>
+  add_recipe(recipe_1) |>
   add_model(rf_model)
 
 rf_model
@@ -566,21 +572,34 @@ Lets fit it to our CV folds.
 rf_fit <- rf_wfl |>
   tune_grid(resamples = bike_train_10_fold,
             grid = 7,
-            metrics = metric_set(accuracy, mn_log_loss))
+            metrics = metric_set(rmse))
 
 rf_fit |>
 collect_metrics() |>
-filter(.metric == "mn_log_loss") |>
+filter(.metric == "rmse") |>
 arrange(mean)
 ```
 Placeholder after issue resolved on all models failing
 
 ```{r}
-rf_best_params <- select_best(rf_fit, "mn_log_loss")
+rf_best_params <- select_best(rf_fit, metric="rmse")
 
-rf_final_wkf <- rf_wkf |>
+rf_final_wfl <- rf_wfl |>
   finalize_workflow(rf_best_params)
-rf_final_fit <- rf_final_wkf |>
-  last_fit(bike_split, metrics = metric_set(accuracy, mn_log_loss))
+rf_final_fit <- rf_final_wfl |>
+  last_fit(bike_split, metrics = metric_set(rmse,mae))
+
+rf_test_metrics <- rf_final_fit |>
+  collect_metrics()
+```
+
+## Comparing all our models
+
+Lets look at all our models. We wnat to pick the best model from the RMSE statistic and the MAE statistic.
+
+We can see for both MAE and RMSE, our Random Forest model is the winner (first two rows) and boast the lowest values for each!
+
+```{r}
+rbind(rf_test_metrics,bag_test_metrics,lasso_test_metrics,tree_test_metrics,mlr_test_metrics)
 ```
 
