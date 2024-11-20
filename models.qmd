@@ -17,6 +17,7 @@ library(see)
 library(glmnet)
 library(baguette)
 library(ranger)
+library(rpart.plot)
 
 bike_data <- read_csv(file='https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv',show_col_types=FALSE)
 head(bike_data)
@@ -30,16 +31,6 @@ Lets check for the missing values in our data...The good news is there are no mi
 
 ```{r}
 colSums(is.na(bike_data))
-```
-
-Lets check the column types to make sure they make sense along with some sample values. A few things we notice:
-
-1.  Date is read in as `character` type. We will want to update this to numeric or date type
-2.  There are four Seasons. Winter, Sprint, Fall and Summer.
-3.  Holiday and Functioning Day attributes could be used as boolean if needed. They only hold 2 values
-
-```{r}
-str(bike_data)
 ```
 
 Diving a level further, lets make sure all of our numeric columns where we should only expect values greater than zero follow that pattern. We will also want to make sure our assumption on values for Seasons, Holiday and Functioning Day hold true.
@@ -348,6 +339,11 @@ final_model <- bike_wfl_3 |>
 mlr_test_metrics
 final_model
 ```
+### MLR Summary
+
+In our output above, we see a table of our estimates for our different parameters, which includes some interactions and polynomials. We can also see our standard errors.
+
+To use this module, we can plug in our parameters and use the `predict()` function to see how our best MLR model would perform against new data. We won't do this here, but we now know our coefficients.
 
 # Additional Models
 
@@ -425,24 +421,27 @@ lowest_rmse_3 <- lasso_grid_3 |>
 rbind(lowest_rmse_1,lowest_rmse_2,lowest_rmse_3)
 ```
 
-Below we find our estimates of our coefficients and the penalty for the model fit on the entire training set.
+Using our best model, we'll train on the training dataset and evaluate performance against the test set. See our metrics below for RMSE for our best Lasso Model.
 
 ```{r}
 lasso_final <- lasso_wfl_3 |>
   finalize_workflow(lowest_rmse_3) |>
-  fit(bike_train)
-tidy(lasso_final)
-```
+  last_fit(bike_split,metrics=metric_set(rmse,mae))
 
-Lastly, using our best model, we'll train on the training dataset and evalauate performance against the test set. See our metrics below for RMSE for our best Lasso Model.
-
-```{r}
-lasso_test_metrics <- lasso_wfl_3 |>
-  finalize_workflow(lowest_rmse_3) |>
-  last_fit(bike_split,metrics=metric_set(rmse,mae)) |>
+lasso_test_metrics <- lasso_final |>
   collect_metrics()
 
 lasso_test_metrics
+```
+### Lasso Summary
+
+Below we see our table of coefficients for our best lasso model. This includes our estimates and our tuning parameter (penalty)
+
+```{r}
+lasso_summary <- lasso_wfl_3 |>
+  finalize_workflow(lowest_rmse_3) |>
+  fit(bike_train)
+tidy(lasso_summary)
 ```
 
 ## Regression Tree
@@ -500,6 +499,18 @@ tree_test_metrics <- tree_final_fit |>
 
 tree_test_metrics
 ```
+
+### Regression Tree Summary
+
+In the below graph, we can see how our regression tree is working in a graph.
+
+```{r}
+tree_final_fit |>
+  extract_workflow(tree_final_fit) |>
+  extract_fit_engine() |>
+  rpart.plot::rpart.plot(roundint = FALSE)
+```
+
 ## Bagged Tree
 
 Now we'll tune a bag tree model and pick the best from this class of models. Per usual, lets start with defining the model and building the workflow. Again, we'll use `recipe_3` from our linear regression section since we can reuse it here.
@@ -550,6 +561,21 @@ bag_test_metrics <- bag_final_fit |>
 
 bag_test_metrics
 ```
+### Bagged Summary
+
+Below we can see our final variable plot for our bagged tree. This tells us the importance of our variables. We see that ____, ____ and ____ are our most important variables
+
+```{r}
+bag_extract_fit <- bag_final_wkf |>
+  fit(bike_train) |>
+  extract_fit_engine()
+
+bag_extract_fit$imp |>
+  mutate(term = factor(term, levels = term)) |>
+  ggplot(aes(x = term, y = value)) +
+  geom_bar(stat ="identity") +
+  coord_flip()
+```
 
 ## Random Forest
 
@@ -586,11 +612,28 @@ rf_best_params <- select_best(rf_fit, metric="rmse")
 
 rf_final_wfl <- rf_wfl |>
   finalize_workflow(rf_best_params)
+
 rf_final_fit <- rf_final_wfl |>
   last_fit(bike_split, metrics = metric_set(rmse,mae))
 
 rf_test_metrics <- rf_final_fit |>
   collect_metrics()
+
+rf_test_metrics
+```
+
+### Random FOrest Summary
+
+```{r}
+rf_extract_fit <- rf_final_wfl |>
+  fit(bike_train) |>
+  extract_fit_engine()
+
+rf_extract_fit$imp |>
+  mutate(term = factor(term, levels = term)) |>
+  ggplot(aes(x = term, y = value)) +
+  geom_bar(stat ="identity") +
+  coord_flip()
 ```
 
 ## Comparing all our models
