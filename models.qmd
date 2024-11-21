@@ -18,12 +18,14 @@ library(glmnet)
 library(baguette)
 library(ranger)
 library(rpart.plot)
-
-bike_data <- read_csv(file='https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv',show_col_types=FALSE)
-head(bike_data)
+library(vip)
 ```
 
-## Exploratory Data Ananlyses
+```{r}
+bike_data <- read_csv(file='https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv',show_col_types = FALSE)
+```
+
+## Exploratory Data Analyses
 
 Before building our models, we want to get familiar with our data and perform some non-transformative data transformations if needed.
 
@@ -121,8 +123,6 @@ bike_summaries$general <- bike_data %>%
                                                  "IQR" = IQR), .names = "{.fn}_{.col}"))
 
 bike_summaries
-
-
 ```
 
 One major thing that stands out is no bikes are sold on a non-functioning day. This makes sense because a bike shop cannot sell bikes when it is closed. We will subset the data to only look at functioning days
@@ -339,6 +339,7 @@ final_model <- bike_wfl_3 |>
 mlr_test_metrics
 final_model
 ```
+
 ### MLR Summary
 
 In our output above, we see a table of our estimates for our different parameters, which includes some interactions and polynomials. We can also see our standard errors.
@@ -356,7 +357,7 @@ We'll consider some additional models as well. This includes the following:
 
 ## Lasso Model
 
-Starting with our Lasso Model. We can re-use our 3 recipes from the MLR steps which are simply named `recipe_1`, `recipe_2`, and `recipe_3`. We will have our lasso model and then create our 3 separate workflows
+Starting with our Lasso Model. We can re-use our first from the MLR steps which is simply named `recipe_1`. We will have our lasso model and then create our workflow.
 
 ```{r}
 lasso_mod <- linear_reg(penalty = tune(), mixture = 1) |>
@@ -366,17 +367,9 @@ lasso_wfl_1 <- workflow() |>
   add_recipe(recipe_1) |>
   add_model(lasso_mod)
 
-lasso_wfl_2 <- workflow() |>
-  add_recipe(recipe_1) |>
-  add_model(lasso_mod)
-
-lasso_wfl_3 <- workflow() |>
-  add_recipe(recipe_1) |>
-  add_model(lasso_mod)
-
 ```
 
-We'll create tuning grids to execute our separate workflows on 200 different levels of our tuning parameter. Our CV folds will be passed for sampling.
+We'll create tuning grids to execute our workflow on 200 different levels of our tuning parameter. Our CV folds will be passed for sampling.
 
 We are showing the output for `lasso_grid_1`. We can see there are nested tibbles with metrics on the 200 models trained for each fold!
 
@@ -386,17 +379,10 @@ lasso_grid_1 <- lasso_wfl_1 |>
             grid = grid_regular(penalty(), levels = 200),
             metrics = metric_set(rmse,mae))
 
-lasso_grid_2 <- lasso_wfl_2 |>
-  tune_grid(resamples = bike_train_10_fold,
-            grid = grid_regular(penalty(), levels = 200)) 
-
-lasso_grid_3 <- lasso_wfl_3 |>
-  tune_grid(resamples = bike_train_10_fold,
-            grid = grid_regular(penalty(), levels = 200)) 
-
 lasso_grid_1
 ```
-Going one step further, lets unpack the above output to make it a little cleaner and more readable. To reduce clutter, we'll show the output for `lasso_grid_1`. Don't worry! We'll look at the RMSE for other models later.
+
+Going one step further, lets unpack the above output to make it a little cleaner and more readable. To reduce clutter, we'll show the output for `lasso_grid_1`.
 
 Again, this seems hard to read as the RMSE seems static across penalties. Note that there are 200 records in this tibble, so we should see some differences on the back-end of our records.
 
@@ -406,26 +392,20 @@ lasso_grid_1 |>
   filter(.metric %in% c("rmse"))
 ```
 
-Lets fetch the lowest RMSE for each of our workflows and showcase the output. We have very similar optimal pentalties, our tuning parameter.
+Lets fetch the lowest RMSE for each of our workflows and showcase the output. We see our tuned penalty parameter below.
 
 ```{r}
 lowest_rmse_1 <- lasso_grid_1 |>
   select_best(metric = "rmse")
 
-lowest_rmse_2 <- lasso_grid_2 |>
-  select_best(metric = "rmse")
-
-lowest_rmse_3 <- lasso_grid_3 |>
-  select_best(metric = "rmse")
-
-rbind(lowest_rmse_1,lowest_rmse_2,lowest_rmse_3)
+rbind(lowest_rmse_1)
 ```
 
 Using our best model, we'll train on the training dataset and evaluate performance against the test set. See our metrics below for RMSE for our best Lasso Model.
 
 ```{r}
-lasso_final <- lasso_wfl_3 |>
-  finalize_workflow(lowest_rmse_3) |>
+lasso_final <- lasso_wfl_1 |>
+  finalize_workflow(lowest_rmse_1) |>
   last_fit(bike_split,metrics=metric_set(rmse,mae))
 
 lasso_test_metrics <- lasso_final |>
@@ -433,13 +413,14 @@ lasso_test_metrics <- lasso_final |>
 
 lasso_test_metrics
 ```
+
 ### Lasso Summary
 
-Below we see our table of coefficients for our best lasso model. This includes our estimates and our tuning parameter (penalty)
+Below we see our table of coefficients for our best lasso model fit to our training data. This includes our estimates and our tuning parameter (penalty)
 
 ```{r}
-lasso_summary <- lasso_wfl_3 |>
-  finalize_workflow(lowest_rmse_3) |>
+lasso_summary <- lasso_wfl_1 |>
+  finalize_workflow(lowest_rmse_1) |>
   fit(bike_train)
 tidy(lasso_summary)
 ```
@@ -463,6 +444,7 @@ tree_wfl <- workflow() |>
 
 tree_wfl
 ```
+
 Now we want to fit our data to our cross-validation folds. We'll use our workflow we created above and tune our grid using the folds. Note that we are not specifying the levels for tuning complexity and tree depth.
 
 We can see in our output the cost complexity and tree depth parameters used along with their RMSE and RSQ.
@@ -522,18 +504,19 @@ bag_model <- bag_tree(tree_depth = 5, min_n = 10, cost_complexity = tune()) |>
   set_engine("rpart") |>
   set_mode("regression")
 
-bag_wfl <- bag_wkf <- workflow() |>
-  add_recipe(recipe_3) |>
+bag_wfl <- workflow() |>
+  add_recipe(recipe_1) |>
   add_model(bag_model)
 
 bag_wfl
 ```
+
 Now to fit our model. We'll use our cross-validation folds and ensure the metrics return are accuracy and log-loss.
 
 We see our best fit model on the first tow of the output above.
 
 ```{r}
-bag_fit <- bag_wkf |>
+bag_fit <- bag_wfl |>
   tune_grid(resamples = bike_train_10_fold,
             grid = grid_regular(cost_complexity(),
                                 levels = 15),
@@ -550,7 +533,7 @@ Using that model with our tuned parameters, we'll finalize our workflow, train t
 ```{r}
 bag_best_params <- select_best(bag_fit, metric = "rmse")
 
-bag_final_wkf <- bag_wkf |>
+bag_final_wkf <- bag_wfl |>
   finalize_workflow(bag_best_params)
 
 bag_final_fit <- bag_final_wkf |>
@@ -561,9 +544,10 @@ bag_test_metrics <- bag_final_fit |>
 
 bag_test_metrics
 ```
+
 ### Bagged Summary
 
-Below we can see our final variable plot for our bagged tree. This tells us the importance of our variables. We see that ____, ____ and ____ are our most important variables
+Below we can see our final variable plot for our bagged tree. This tells us the importance of our variables. We see that Average Temperature, Average Solar Radiation and Average Dew Temp are our most important variables.
 
 ```{r}
 bag_extract_fit <- bag_final_wkf |>
@@ -583,7 +567,7 @@ The last model we want to evaluate is a random forest model. Time for our model 
 
 ```{r}
 rf_model <- rand_forest(mtry = tune()) |>
-  set_engine("ranger") |>
+  set_engine("ranger", importance = "impurity") |>
   set_mode("regression")
 
 rf_wfl <- workflow() |>
@@ -592,6 +576,7 @@ rf_wfl <- workflow() |>
 
 rf_model
 ```
+
 Lets fit it to our CV folds.
 
 ```{r}
@@ -605,6 +590,7 @@ collect_metrics() |>
 filter(.metric == "rmse") |>
 arrange(mean)
 ```
+
 Placeholder after issue resolved on all models failing
 
 ```{r}
@@ -622,16 +608,19 @@ rf_test_metrics <- rf_final_fit |>
 rf_test_metrics
 ```
 
-### Random FOrest Summary
+### Random Forest Summary
+
+In our fit on our bike train data, we see that 2 of our top 3 variables in terms of importance are the same as our Bagged Model. Those two are Average Temperature and Average Solar Radiation. Where it differs is the binary variable denoting the season winter as our third most important variable in this model!
 
 ```{r}
 rf_extract_fit <- rf_final_wfl |>
   fit(bike_train) |>
   extract_fit_engine()
 
-rf_extract_fit$imp |>
-  mutate(term = factor(term, levels = term)) |>
-  ggplot(aes(x = term, y = value)) +
+rf_extract_fit |>
+  vip::vi() |>
+  arrange(Importance) |>
+  ggplot(aes(x = Variable, y = Importance)) +
   geom_bar(stat ="identity") +
   coord_flip()
 ```
@@ -640,9 +629,21 @@ rf_extract_fit$imp |>
 
 Lets look at all our models. We want to pick the best model from the RMSE statistic and the MAE statistic.
 
-We can see for both MAE and RMSE, our Random Forest model is the winner (first two rows) and boast the lowest values for each!
+We can see for both MAE and RMSE, our Multiple Linear regression model is the winner (last two rows) and boast the lowest values for each!
 
 ```{r}
 rbind(rf_test_metrics,bag_test_metrics,lasso_test_metrics,tree_test_metrics,mlr_test_metrics)
 ```
 
+## Final Model
+
+Our MLR model was our winner! The last thing to do is to fit that model on the ENTIRE data set instead of our training and test splits. The final output and metrics are below.
+
+We can see our coefficient estimates fitted against the entire dataset below for our best MLR model. This includes interactions and polynomial terms
+
+```{r}
+bike_wfl_3 |>
+  fit(agg_bike_data) |>
+  extract_fit_parsnip() |>
+  tidy()
+```
